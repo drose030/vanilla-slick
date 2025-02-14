@@ -1133,6 +1133,242 @@ class Slick {
     resetPosition() {
         this.setPosition();
     }
+
+    setupDynamicContent() {
+        this.observer = new MutationObserver(mutations => {
+            let needsRefresh = false;
+            
+            mutations.forEach(mutation => {
+                if (mutation.type === 'childList' && 
+                    mutation.target === this.trackElement) {
+                    needsRefresh = true;
+                }
+            });
+
+            if (needsRefresh) {
+                this.refresh();
+                this.trigger('contentChange');
+            }
+        });
+
+        this.observer.observe(this.trackElement, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    addSlide(element, index = null) {
+        const slide = element instanceof Element ? 
+            element : 
+            this.createElementFromHTML(element);
+        
+        slide.classList.add('slick-slide');
+
+        if (index === null || index >= this.slideCount) {
+            this.trackElement.appendChild(slide);
+        } else {
+            const target = this.trackElement.children[index];
+            this.trackElement.insertBefore(slide, target);
+        }
+
+        this.slideCount++;
+        this.refresh();
+        this.trigger('slideAdded', slide, index);
+    }
+
+    removeSlide(index) {
+        if (index < 0 || index >= this.slideCount) return;
+
+        const slide = this.trackElement.children[index];
+        if (!slide) return;
+
+        slide.remove();
+        this.slideCount--;
+        
+        if (index <= this.currentSlide) {
+            this.currentSlide = Math.max(0, this.currentSlide - 1);
+        }
+
+        this.refresh();
+        this.trigger('slideRemoved', index);
+    }
+
+    setupAdvancedA11y() {
+        // Live region for screen readers
+        this.liveRegion = document.createElement('div');
+        this.liveRegion.setAttribute('aria-live', 'polite');
+        this.liveRegion.setAttribute('aria-atomic', 'true');
+        this.liveRegion.classList.add('slick-live-region');
+        this.element.appendChild(this.liveRegion);
+
+        // Enhanced keyboard navigation
+        this.setupKeyboardTrap();
+        this.setupSlideRoles();
+    }
+
+    setupKeyboardTrap() {
+        const focusableElements = 
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+        
+        this.element.addEventListener('keydown', (e) => {
+            if (e.key !== 'Tab') return;
+
+            const focusable = this.element
+                .querySelectorAll(focusableElements);
+            const firstFocusable = focusable[0];
+            const lastFocusable = focusable[focusable.length - 1];
+
+            if (e.shiftKey) {
+                if (document.activeElement === firstFocusable) {
+                    lastFocusable.focus();
+                    e.preventDefault();
+                }
+            } else {
+                if (document.activeElement === lastFocusable) {
+                    firstFocusable.focus();
+                    e.preventDefault();
+                }
+            }
+        });
+    }
+
+    setupSlideRoles() {
+        const slides = Array.from(this.trackElement.children);
+        slides.forEach((slide, index) => {
+            slide.setAttribute('role', 'tabpanel');
+            slide.setAttribute('aria-roledescription', 'slide');
+            slide.setAttribute('aria-label', `${index + 1} of ${slides.length}`);
+            
+            // Make all interactive elements focusable
+            const interactive = slide.querySelectorAll(
+                'a, button, input, select, textarea'
+            );
+            interactive.forEach(el => {
+                if (index === this.currentSlide) {
+                    el.setAttribute('tabindex', '0');
+                } else {
+                    el.setAttribute('tabindex', '-1');
+                }
+            });
+        });
+    }
+
+    setupPerformanceMonitoring() {
+        this.performanceMetrics = {
+            frameDrops: 0,
+            averageTransitionTime: 0,
+            transitionCount: 0,
+            lastFrameTime: performance.now()
+        };
+
+        // Monitor frame drops
+        this.frameMonitor = requestAnimationFrame(this.monitorFrames.bind(this));
+    }
+
+    monitorFrames(timestamp) {
+        const frameTime = timestamp - this.performanceMetrics.lastFrameTime;
+        const expectedFrame = 1000 / 60; // 60fps
+
+        if (frameTime > expectedFrame * 2) {
+            this.performanceMetrics.frameDrops++;
+            
+            if (this.performanceMetrics.frameDrops > 5) {
+                this.optimizePerformance();
+            }
+        }
+
+        this.performanceMetrics.lastFrameTime = timestamp;
+        this.frameMonitor = requestAnimationFrame(this.monitorFrames.bind(this));
+    }
+
+    optimizePerformance() {
+        // Reduce animation complexity
+        if (this.settings.cssEase !== 'ease') {
+            this.settings.cssEase = 'ease';
+            this.setupCustomEasing();
+        }
+
+        // Disable transitions during rapid interactions
+        if (this.performanceMetrics.frameDrops > 10) {
+            this.element.classList.add('slick-performance-mode');
+        }
+
+        // Force hardware acceleration
+        this.trackElement.style.transform = 'translate3d(0,0,0)';
+    }
+
+    setupErrorHandling() {
+        this.errorState = false;
+
+        window.addEventListener('error', (event) => {
+            if (event.target.closest('.slick-slider') === this.element) {
+                this.handleError(event);
+            }
+        }, true);
+    }
+
+    handleError(error) {
+        this.errorState = true;
+        this.element.classList.add('slick-error');
+        
+        console.error('Slick Slider Error:', error);
+        this.trigger('error', error);
+
+        // Try to recover
+        this.recoverFromError();
+    }
+
+    recoverFromError() {
+        try {
+            // Reset to initial slide
+            this.slickGoTo(0, true);
+            
+            // Clear any ongoing animations
+            this.trackElement.style.transition = 'none';
+            
+            // Reset error state after recovery
+            setTimeout(() => {
+                this.errorState = false;
+                this.element.classList.remove('slick-error');
+                this.trackElement.style.transition = '';
+            }, 100);
+        } catch (e) {
+            console.error('Recovery failed:', e);
+        }
+    }
+
+    setupDebugMode() {
+        if (!this.settings.debug) return;
+
+        this.debugLog = [];
+        this.debugElement = document.createElement('div');
+        this.debugElement.classList.add('slick-debug');
+        this.element.appendChild(this.debugElement);
+
+        this.on('beforeChange', (...args) => this.logDebug('beforeChange', args));
+        this.on('afterChange', (...args) => this.logDebug('afterChange', args));
+        this.on('error', (...args) => this.logDebug('error', args));
+    }
+
+    logDebug(type, data) {
+        if (!this.settings.debug) return;
+
+        const log = {
+            timestamp: new Date().toISOString(),
+            type,
+            data
+        };
+
+        this.debugLog.push(log);
+        this.updateDebugDisplay();
+    }
+
+    updateDebugDisplay() {
+        if (!this.debugElement) return;
+
+        const lastLog = this.debugLog[this.debugLog.length - 1];
+        this.debugElement.textContent = JSON.stringify(lastLog, null, 2);
+    }
 }
 
 // Add jQuery compatibility layer if jQuery is present
