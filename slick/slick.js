@@ -700,6 +700,210 @@ class Slick {
             }
         });
     }
+
+    initializeLazyLoad() {
+        if (this.settings.lazyLoad !== 'ondemand') return;
+
+        const slides = Array.from(this.trackElement.children);
+        slides.forEach(slide => {
+            const images = slide.querySelectorAll('[data-lazy]');
+            images.forEach(img => {
+                img.classList.add('slick-loading');
+                this.setupLazyLoadHandler(img);
+            });
+        });
+    }
+
+    setupLazyLoadHandler(img) {
+        const loadImage = () => {
+            const src = img.getAttribute('data-lazy');
+            img.src = src;
+            img.removeAttribute('data-lazy');
+            img.classList.remove('slick-loading');
+            img.classList.add('slick-loaded');
+        };
+
+        if (this.isElementInViewport(img)) {
+            loadImage();
+        } else {
+            const observer = new IntersectionObserver(entries => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        loadImage();
+                        observer.disconnect();
+                    }
+                });
+            });
+            observer.observe(img);
+        }
+    }
+
+    setupCenterMode() {
+        if (!this.settings.centerMode) return;
+
+        this.element.classList.add('slick-center');
+        const padding = this.settings.centerPadding;
+        
+        this.element.style.padding = `0 ${padding}`;
+        this.updateCenterOffset();
+    }
+
+    updateCenterOffset() {
+        if (!this.settings.centerMode) return;
+
+        const centerOffset = Math.floor(this.settings.slidesToShow / 2);
+        const rtlOffset = this.settings.rtl ? 1 : 0;
+        
+        this.currentLeftOffset = (this.slideWidth * centerOffset) * (this.settings.rtl ? 1 : -1);
+        this.setCSS(this.getLeft(this.currentSlide + centerOffset - rtlOffset));
+    }
+
+    setupRTL() {
+        if (!this.settings.rtl) return;
+
+        this.element.dir = 'rtl';
+        this.element.classList.add('slick-rtl');
+
+        // Reverse the order of slides for RTL
+        const slides = Array.from(this.trackElement.children);
+        slides.reverse().forEach(slide => this.trackElement.appendChild(slide));
+    }
+
+    setupVariableWidth() {
+        if (!this.settings.variableWidth) return;
+
+        this.trackElement.style.width = '';
+        Array.from(this.trackElement.children).forEach(slide => {
+            slide.style.width = '';
+        });
+    }
+
+    setupVerticalMode() {
+        if (!this.settings.vertical) return;
+
+        this.element.classList.add('slick-vertical');
+        this.setVerticalDimensions();
+    }
+
+    setVerticalDimensions() {
+        const slides = Array.from(this.trackElement.children);
+        const totalHeight = slides.reduce((acc, slide) => 
+            acc + slide.offsetHeight, 0);
+        
+        this.trackElement.style.height = totalHeight + 'px';
+        slides.forEach(slide => {
+            slide.style.height = 'auto';
+        });
+    }
+
+    setupRows() {
+        if (this.settings.rows <= 1) return;
+
+        const slides = Array.from(this.trackElement.children);
+        const slidesPerRow = Math.ceil(slides.length / this.settings.rows);
+        let newSlides = [];
+
+        for (let i = 0; i < this.settings.rows; i++) {
+            const row = document.createElement('div');
+            row.className = 'slick-row';
+
+            for (let j = 0; j < slidesPerRow; j++) {
+                const slideIndex = i * slidesPerRow + j;
+                if (slideIndex < slides.length) {
+                    row.appendChild(slides[slideIndex].cloneNode(true));
+                }
+            }
+
+            newSlides.push(row);
+        }
+
+        this.trackElement.innerHTML = '';
+        newSlides.forEach(row => this.trackElement.appendChild(row));
+    }
+
+    addEventHandlers() {
+        // Keyboard navigation
+        if (this.settings.accessibility) {
+            document.addEventListener('keydown', this.handleKeyboard.bind(this));
+        }
+
+        // Focus handling
+        if (this.settings.focusOnSelect) {
+            this.element.addEventListener('click', this.handleFocusSelect.bind(this));
+        }
+
+        // Mouse wheel navigation
+        if (this.settings.mouseWheel) {
+            this.element.addEventListener('wheel', this.handleMouseWheel.bind(this));
+        }
+    }
+
+    handleKeyboard(event) {
+        if (!this.element.contains(document.activeElement)) return;
+
+        switch(event.key) {
+            case 'ArrowLeft':
+                event.preventDefault();
+                this.settings.rtl ? this.slickNext() : this.slickPrev();
+                break;
+            case 'ArrowRight':
+                event.preventDefault();
+                this.settings.rtl ? this.slickPrev() : this.slickNext();
+                break;
+            case 'ArrowUp':
+                if (this.settings.vertical) {
+                    event.preventDefault();
+                    this.slickPrev();
+                }
+                break;
+            case 'ArrowDown':
+                if (this.settings.vertical) {
+                    event.preventDefault();
+                    this.slickNext();
+                }
+                break;
+        }
+    }
+
+    handleFocusSelect(event) {
+        const slide = event.target.closest('.slick-slide');
+        if (!slide) return;
+
+        const slideIndex = Array.from(this.trackElement.children).indexOf(slide);
+        if (slideIndex >= 0) {
+            this.slickGoTo(slideIndex);
+            slide.focus();
+        }
+    }
+
+    handleMouseWheel(event) {
+        event.preventDefault();
+        const delta = Math.sign(event.deltaY);
+        
+        if (delta > 0) {
+            this.slickNext();
+        } else if (delta < 0) {
+            this.slickPrev();
+        }
+    }
+
+    isElementInViewport(el) {
+        const rect = el.getBoundingClientRect();
+        return (
+            rect.top >= 0 &&
+            rect.left >= 0 &&
+            rect.bottom <= window.innerHeight &&
+            rect.right <= window.innerWidth
+        );
+    }
+
+    refresh() {
+        this.setPosition();
+        this.updateA11y();
+        if (this.settings.lazyLoad === 'ondemand') {
+            this.initializeLazyLoad();
+        }
+    }
 }
 
 // Add jQuery compatibility layer if jQuery is present
