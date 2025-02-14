@@ -1,3 +1,48 @@
+/**
+ * Custom error class for Slick-specific errors
+ */
+class SlickError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'SlickError';
+    }
+}
+
+/**
+ * State management class for Slick
+ */
+class SlickState {
+    constructor(initialState = {}) {
+        this.listeners = new Set();
+        this.state = new Proxy(initialState, {
+            set: (target, property, value) => {
+                const oldValue = target[property];
+                target[property] = value;
+                this.notifyListeners(property, value, oldValue);
+                return true;
+            }
+        });
+    }
+
+    addListener(listener) {
+        this.listeners.add(listener);
+    }
+
+    removeListener(listener) {
+        this.listeners.delete(listener);
+    }
+
+    notifyListeners(property, newValue, oldValue) {
+        this.listeners.forEach(listener => 
+            listener(property, newValue, oldValue));
+    }
+}
+
+/**
+ * Slick Carousel
+ * @class
+ * @classdesc A modern, vanilla JavaScript implementation of the Slick Carousel
+ */
 class Slick {
     static defaults = {
         accessibility: true,
@@ -52,19 +97,180 @@ class Slick {
         zIndex: 1000
     };
 
+    /**
+     * @param {(Element|string)} element - DOM element or selector
+     * @param {Object} settings - Carousel settings
+     * @throws {SlickError} When initialization fails
+     */
     constructor(element, settings = {}) {
-        if (!(element instanceof Element)) {
-            element = document.querySelector(element);
+        try {
+            this.validateElement(element);
+            this.validateSettings(settings);
+            
+            // Initialize performance monitoring
+            performance.mark('slick-init-start');
+            
+            // Setup core properties
+            this.element = typeof element === 'string' ? 
+                document.querySelector(element) : element;
+            this.originalHTML = this.element.innerHTML;
+            this.settings = { ...Slick.defaults, ...settings };
+            
+            // Check browser support
+            this.checkBrowserSupport();
+            
+            // Setup state management
+            this.setupState();
+            
+            // Initialize components
+            this.initialize();
+            
+            performance.mark('slick-init-end');
+            performance.measure('slick-initialization', 
+                'slick-init-start', 'slick-init-end');
+        } catch (error) {
+            throw new SlickError(`Initialization failed: ${error.message}`);
         }
-        
-        this.element = element;
-        this.settings = { ...Slick.defaults, ...settings };
-        this.currentSlide = 0;
-        this.slideCount = 0;
-        this.dragging = false;
-        this.touchObject = {};
-        
-        this.init();
+    }
+
+    /**
+     * Validates the element parameter
+     * @private
+     */
+    validateElement(element) {
+        if (!element) {
+            throw new SlickError('Element is required');
+        }
+        if (!(element instanceof Element) && typeof element !== 'string') {
+            throw new SlickError('Element must be a DOM element or selector string');
+        }
+    }
+
+    /**
+     * Validates the settings object
+     * @private
+     */
+    validateSettings(settings) {
+        const validationSchema = {
+            slidesToShow: (value) => typeof value === 'number' && value > 0,
+            infinite: (value) => typeof value === 'boolean',
+            speed: (value) => typeof value === 'number' && value >= 0,
+            autoplay: (value) => typeof value === 'boolean',
+            autoplaySpeed: (value) => typeof value === 'number' && value >= 0,
+            arrows: (value) => typeof value === 'boolean',
+            dots: (value) => typeof value === 'boolean',
+            responsive: (value) => Array.isArray(value) || value === null,
+            // Add more validation rules as needed
+        };
+
+        Object.entries(settings).forEach(([key, value]) => {
+            if (validationSchema[key] && !validationSchema[key](value)) {
+                throw new SlickError(`Invalid setting: ${key}`);
+            }
+        });
+    }
+
+    /**
+     * Checks browser support for required features
+     * @private
+     */
+    async checkBrowserSupport() {
+        const required = {
+            IntersectionObserver: 'IntersectionObserver' in window,
+            ResizeObserver: 'ResizeObserver' in window,
+            CustomEvent: 'CustomEvent' in window,
+            Promise: 'Promise' in window,
+            WeakMap: 'WeakMap' in window,
+            MutationObserver: 'MutationObserver' in window
+        };
+
+        const missing = Object.entries(required)
+            .filter(([, supported]) => !supported)
+            .map(([feature]) => feature);
+
+        if (missing.length > 0) {
+            console.warn(`Slick: Missing browser features: ${missing.join(', ')}`);
+            await this.loadPolyfills(missing);
+        }
+    }
+
+    /**
+     * Loads necessary polyfills
+     * @private
+     */
+    async loadPolyfills(missing) {
+        const polyfillUrls = {
+            IntersectionObserver: 'https://polyfill.io/v3/polyfill.min.js?features=IntersectionObserver',
+            ResizeObserver: 'https://polyfill.io/v3/polyfill.min.js?features=ResizeObserver',
+            // Add more polyfill URLs as needed
+        };
+
+        const promises = missing
+            .filter(feature => polyfillUrls[feature])
+            .map(feature => 
+                this.loadScript(polyfillUrls[feature])
+            );
+
+        await Promise.all(promises);
+    }
+
+    /**
+     * Loads a script dynamically
+     * @private
+     */
+    loadScript(url) {
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = url;
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+        });
+    }
+
+    /**
+     * Sets up state management
+     * @private
+     */
+    setupState() {
+        const initialState = {
+            currentSlide: 0,
+            slideCount: 0,
+            isDragging: false,
+            isAnimating: false,
+            direction: this.settings.rtl ? 'rtl' : 'ltr',
+            breakpoint: null,
+            isInitialized: false,
+            error: null
+        };
+
+        this.state = new SlickState(initialState);
+        this.state.addListener(this.handleStateChange.bind(this));
+    }
+
+    /**
+     * Handles state changes
+     * @private
+     */
+    handleStateChange(property, newValue, oldValue) {
+        // Trigger custom event
+        const event = new CustomEvent('slick:stateChange', {
+            bubbles: true,
+            detail: { property, newValue, oldValue }
+        });
+        this.element.dispatchEvent(event);
+
+        // Handle specific state changes
+        switch (property) {
+            case 'currentSlide':
+                this.updateSlideVisibility();
+                this.updateAriaAttributes();
+                break;
+            case 'error':
+                this.handleError(newValue);
+                break;
+            // Add more cases as needed
+        }
     }
 
     init() {
@@ -113,7 +319,7 @@ class Slick {
                      !child.classList.contains('slick-list')
         );
         
-        this.slideCount = slides.length;
+        this.state.state.slideCount = slides.length;
         
         slides.forEach(slide => {
             slide.classList.add('slick-slide');
@@ -178,14 +384,14 @@ class Slick {
     // Helper methods for slide transitions
     changeSlide(options) {
         const { message, index, dontAnimate } = options.data;
-        let targetSlide = this.currentSlide;
+        let targetSlide = this.state.state.currentSlide;
         
         switch (message) {
             case 'previous':
-                targetSlide = this.currentSlide - this.settings.slidesToScroll;
+                targetSlide = this.state.state.currentSlide - this.settings.slidesToScroll;
                 break;
             case 'next':
-                targetSlide = this.currentSlide + this.settings.slidesToScroll;
+                targetSlide = this.state.state.currentSlide + this.settings.slidesToScroll;
                 break;
             case 'index':
                 targetSlide = index;
@@ -197,13 +403,13 @@ class Slick {
 
     slideHandler(index, dontAnimate = false) {
         if (this.settings.fade) {
-            this.fadeSlideOut(this.currentSlide);
+            this.fadeSlideOut(this.state.state.currentSlide);
             this.fadeSlideIn(index);
         } else {
             this.animateSlide(index, dontAnimate);
         }
         
-        this.currentSlide = index;
+        this.state.state.currentSlide = index;
         this.updateSlideVisibility();
     }
 
@@ -231,11 +437,11 @@ class Slick {
         const slideWidth = this.slideWidth;
 
         if (this.settings.infinite) {
-            if (slideIndex + this.settings.slidesToShow > this.slideCount) {
-                slideOffset = -this.slideCount * slideWidth;
+            if (slideIndex + this.settings.slidesToShow > this.state.state.slideCount) {
+                slideOffset = -this.state.state.slideCount * slideWidth;
             }
             if (slideIndex < 0) {
-                slideOffset = this.slideCount * slideWidth;
+                slideOffset = this.state.state.slideCount * slideWidth;
             }
         }
 
@@ -267,7 +473,7 @@ class Slick {
         if (!this.dragging) return;
         
         const touches = event.touches ? event.touches[0] : event;
-        const curLeft = this.getLeft(this.currentSlide);
+        const curLeft = this.getLeft(this.state.state.currentSlide);
 
         this.touchObject.curX = touches.pageX;
         this.touchObject.curY = touches.pageY;
@@ -276,7 +482,7 @@ class Slick {
             Math.pow(this.touchObject.curX - this.touchObject.startX, 2)
         ));
 
-        const edgeWasHit = this.checkNavigable(this.currentSlide);
+        const edgeWasHit = this.checkNavigable(this.state.state.currentSlide);
         const shouldSlide = this.shouldSlide(swipeLength);
 
         if (!shouldSlide || edgeWasHit) {
@@ -306,7 +512,7 @@ class Slick {
         ));
 
         if (swipeLength < this.settings.touchThreshold) {
-            this.animateSlide(this.currentSlide);
+            this.animateSlide(this.state.state.currentSlide);
             return;
         }
 
@@ -370,7 +576,7 @@ class Slick {
         const dots = document.createElement('ul');
         dots.classList.add(this.settings.dotsClass);
 
-        for (let i = 0; i < Math.ceil(this.slideCount / this.settings.slidesToScroll); i++) {
+        for (let i = 0; i < Math.ceil(this.state.state.slideCount / this.settings.slidesToScroll); i++) {
             const dot = document.createElement('li');
             const button = this.settings.customPaging(this, i);
             
@@ -435,7 +641,7 @@ class Slick {
 
     getNavigableIndexes() {
         let indexes = [];
-        let max = this.slideCount - this.settings.slidesToShow;
+        let max = this.state.state.slideCount - this.settings.slidesToShow;
 
         if (!this.settings.infinite) {
             for (let i = 0; i <= max; i++) {
@@ -463,8 +669,8 @@ class Slick {
     updateSlideVisibility() {
         const slides = this.trackElement.children;
         Array.from(slides).forEach((slide, index) => {
-            if (index >= this.currentSlide && 
-                index < this.currentSlide + this.settings.slidesToShow) {
+            if (index >= this.state.state.currentSlide && 
+                index < this.state.state.currentSlide + this.settings.slidesToShow) {
                 slide.style.display = 'block';
             } else {
                 slide.style.display = 'none';
@@ -585,7 +791,7 @@ class Slick {
         if (this.settings.fade) {
             this.setFade();
         } else {
-            this.setCSS(this.getLeft(this.currentSlide));
+            this.setCSS(this.getLeft(this.state.state.currentSlide));
         }
     }
 
@@ -618,7 +824,7 @@ class Slick {
             slide.setAttribute('role', 'group');
             slide.setAttribute('aria-label', `slide ${index + 1} of ${slides.length}`);
             
-            if (index === this.currentSlide) {
+            if (index === this.state.state.currentSlide) {
                 slide.setAttribute('aria-hidden', 'false');
             } else {
                 slide.setAttribute('aria-hidden', 'true');
@@ -644,7 +850,7 @@ class Slick {
     updateA11y() {
         const slides = Array.from(this.trackElement.children);
         slides.forEach((slide, index) => {
-            if (index === this.currentSlide) {
+            if (index === this.state.state.currentSlide) {
                 slide.setAttribute('aria-hidden', 'false');
             } else {
                 slide.setAttribute('aria-hidden', 'true');
@@ -755,7 +961,7 @@ class Slick {
         const rtlOffset = this.settings.rtl ? 1 : 0;
         
         this.currentLeftOffset = (this.slideWidth * centerOffset) * (this.settings.rtl ? 1 : -1);
-        this.setCSS(this.getLeft(this.currentSlide + centerOffset - rtlOffset));
+        this.setCSS(this.getLeft(this.state.state.currentSlide + centerOffset - rtlOffset));
     }
 
     setupRTL() {
@@ -921,8 +1127,8 @@ class Slick {
     syncPosition() {
         if (!this.navTarget) return;
 
-        const targetSlide = this.currentSlide;
-        if (this.navTarget.currentSlide !== targetSlide) {
+        const targetSlide = this.state.state.currentSlide;
+        if (this.navTarget.state.currentSlide !== targetSlide) {
             this.navTarget.slickGoTo(targetSlide, true);
         }
     }
@@ -1079,14 +1285,14 @@ class Slick {
     updateInfinitePositions() {
         if (!this.settings.infinite) return;
 
-        const slideCount = this.slideCount;
+        const slideCount = this.state.state.slideCount;
         const slidesToShow = this.settings.slidesToShow;
 
-        if (this.currentSlide <= -slidesToShow) {
-            this.currentSlide += slideCount;
+        if (this.state.state.currentSlide <= -slidesToShow) {
+            this.state.state.currentSlide += slideCount;
             this.setPosition();
-        } else if (this.currentSlide >= slideCount) {
-            this.currentSlide -= slideCount;
+        } else if (this.state.state.currentSlide >= slideCount) {
+            this.state.state.currentSlide -= slideCount;
             this.setPosition();
         }
     }
@@ -1104,7 +1310,7 @@ class Slick {
     updateProgressBar() {
         if (!this.progressBar) return;
 
-        const progress = (this.currentSlide / (this.slideCount - 1)) * 100;
+        const progress = (this.state.state.currentSlide / (this.state.state.slideCount - 1)) * 100;
         this.progressBar.style.width = `${progress}%`;
     }
 
@@ -1115,8 +1321,8 @@ class Slick {
     }
 
     isAtEdge() {
-        return (this.currentSlide === 0 && !this.settings.infinite) || 
-               (this.currentSlide === this.slideCount - 1 && !this.settings.infinite);
+        return (this.state.state.currentSlide === 0 && !this.settings.infinite) || 
+               (this.state.state.currentSlide === this.state.state.slideCount - 1 && !this.settings.infinite);
     }
 
     calculateEdgeFriction(delta) {
@@ -1125,7 +1331,7 @@ class Slick {
     }
 
     applyFriction(friction, delta) {
-        const position = this.getLeft(this.currentSlide);
+        const position = this.getLeft(this.state.state.currentSlide);
         const adjustment = delta * friction;
         this.setCSS(position + adjustment);
     }
@@ -1164,29 +1370,29 @@ class Slick {
         
         slide.classList.add('slick-slide');
 
-        if (index === null || index >= this.slideCount) {
+        if (index === null || index >= this.state.state.slideCount) {
             this.trackElement.appendChild(slide);
         } else {
             const target = this.trackElement.children[index];
             this.trackElement.insertBefore(slide, target);
         }
 
-        this.slideCount++;
+        this.state.state.slideCount++;
         this.refresh();
         this.trigger('slideAdded', slide, index);
     }
 
     removeSlide(index) {
-        if (index < 0 || index >= this.slideCount) return;
+        if (index < 0 || index >= this.state.state.slideCount) return;
 
         const slide = this.trackElement.children[index];
         if (!slide) return;
 
         slide.remove();
-        this.slideCount--;
+        this.state.state.slideCount--;
         
-        if (index <= this.currentSlide) {
-            this.currentSlide = Math.max(0, this.currentSlide - 1);
+        if (index <= this.state.state.currentSlide) {
+            this.state.state.currentSlide = Math.max(0, this.state.state.currentSlide - 1);
         }
 
         this.refresh();
@@ -1244,7 +1450,7 @@ class Slick {
                 'a, button, input, select, textarea'
             );
             interactive.forEach(el => {
-                if (index === this.currentSlide) {
+                if (index === this.state.state.currentSlide) {
                     el.setAttribute('tabindex', '0');
                 } else {
                     el.setAttribute('tabindex', '-1');
