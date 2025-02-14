@@ -103,6 +103,8 @@ class Slick {
         if (this.settings.autoplay) {
             this.initAutoplay();
         }
+
+        this.initializeResponsive();
     }
 
     initializeSlides() {
@@ -468,6 +470,213 @@ class Slick {
                 slide.style.display = 'none';
             }
         });
+    }
+
+    initializeResponsive() {
+        if (!this.settings.responsive) return;
+
+        const sortedBreakpoints = this.settings.responsive
+            .map(item => item.breakpoint)
+            .sort((a, b) => b - a);
+
+        this.breakpoints = sortedBreakpoints;
+        this.currentBreakpoint = null;
+        
+        this.setupResponsiveEvents();
+        this.respondToBreakpoint();
+    }
+
+    setupResponsiveEvents() {
+        const debounced = this.debounce(this.respondToBreakpoint.bind(this), 150);
+        window.addEventListener('resize', debounced);
+        window.addEventListener('orientationchange', debounced);
+    }
+
+    respondToBreakpoint() {
+        const breakpoint = this.getBreakpoint();
+        if (breakpoint === this.currentBreakpoint) return;
+
+        this.currentBreakpoint = breakpoint;
+        
+        if (breakpoint) {
+            const matchedResponse = this.settings.responsive.find(
+                resp => resp.breakpoint === breakpoint
+            );
+
+            if (matchedResponse) {
+                const newSettings = matchedResponse.settings;
+                if (newSettings === 'unslick') {
+                    this.destroy();
+                } else {
+                    this.updateSettings(newSettings);
+                }
+            }
+        } else {
+            this.updateSettings(this.originalSettings);
+        }
+    }
+
+    getBreakpoint() {
+        const windowWidth = this.settings.respondTo === 'window' 
+            ? window.innerWidth 
+            : this.element.offsetWidth;
+
+        return this.breakpoints.find(breakpoint => windowWidth < breakpoint) || null;
+    }
+
+    updateSettings(settings) {
+        const prevSettings = { ...this.settings };
+        this.settings = { ...this.settings, ...settings };
+
+        // Reinitialize if critical settings changed
+        if (
+            prevSettings.slidesToShow !== this.settings.slidesToShow ||
+            prevSettings.slidesToScroll !== this.settings.slidesToScroll ||
+            prevSettings.vertical !== this.settings.vertical
+        ) {
+            this.reinitialize();
+        }
+    }
+
+    reinitialize() {
+        this.destroyEvents();
+        this.initializeSlides();
+        this.setupEventListeners();
+        if (this.settings.arrows) this.buildArrows();
+        if (this.settings.dots) this.buildDots();
+        if (this.settings.autoplay) this.initAutoplay();
+        this.setPosition();
+    }
+
+    setFade() {
+        const slides = Array.from(this.trackElement.children);
+        slides.forEach((slide, index) => {
+            const leftOffset = this.slideWidth * index * -1;
+            if (this.settings.rtl) {
+                slide.style.position = 'relative';
+                slide.style.right = leftOffset + 'px';
+            } else {
+                slide.style.position = 'relative';
+                slide.style.left = leftOffset + 'px';
+            }
+        });
+    }
+
+    fadeSlideOut(slideIndex) {
+        const slide = this.trackElement.children[slideIndex];
+        if (!slide) return;
+
+        slide.style.transition = `opacity ${this.settings.speed}ms ${this.settings.cssEase}`;
+        slide.style.opacity = '0';
+        slide.style.zIndex = this.settings.zIndex - 2;
+    }
+
+    fadeSlideIn(slideIndex) {
+        const slide = this.trackElement.children[slideIndex];
+        if (!slide) return;
+
+        slide.style.transition = `opacity ${this.settings.speed}ms ${this.settings.cssEase}`;
+        slide.style.opacity = '1';
+        slide.style.zIndex = this.settings.zIndex - 1;
+    }
+
+    setPosition() {
+        this.setDimensions();
+        if (this.settings.fade) {
+            this.setFade();
+        } else {
+            this.setCSS(this.getLeft(this.currentSlide));
+        }
+    }
+
+    setDimensions() {
+        const slides = Array.from(this.trackElement.children);
+        const slideWidth = this.slideWidth;
+
+        slides.forEach(slide => {
+            slide.style.width = slideWidth + 'px';
+        });
+
+        this.trackElement.style.width = 
+            (slideWidth * slides.length) + 'px';
+    }
+
+    setCSS(position) {
+        const transform = this.settings.vertical
+            ? `translate3d(0px, ${position}px, 0px)`
+            : `translate3d(${position}px, 0px, 0px)`;
+
+        this.trackElement.style.transform = transform;
+    }
+
+    setupA11y() {
+        this.element.setAttribute('role', 'region');
+        this.element.setAttribute('aria-label', 'carousel');
+
+        const slides = Array.from(this.trackElement.children);
+        slides.forEach((slide, index) => {
+            slide.setAttribute('role', 'group');
+            slide.setAttribute('aria-label', `slide ${index + 1} of ${slides.length}`);
+            
+            if (index === this.currentSlide) {
+                slide.setAttribute('aria-hidden', 'false');
+            } else {
+                slide.setAttribute('aria-hidden', 'true');
+            }
+        });
+
+        if (this.settings.arrows) {
+            const prevArrow = this.element.querySelector('.slick-prev');
+            const nextArrow = this.element.querySelector('.slick-next');
+            
+            if (prevArrow) {
+                prevArrow.setAttribute('role', 'button');
+                prevArrow.setAttribute('aria-label', 'Previous slide');
+            }
+            
+            if (nextArrow) {
+                nextArrow.setAttribute('role', 'button');
+                nextArrow.setAttribute('aria-label', 'Next slide');
+            }
+        }
+    }
+
+    updateA11y() {
+        const slides = Array.from(this.trackElement.children);
+        slides.forEach((slide, index) => {
+            if (index === this.currentSlide) {
+                slide.setAttribute('aria-hidden', 'false');
+            } else {
+                slide.setAttribute('aria-hidden', 'true');
+            }
+        });
+    }
+
+    destroy() {
+        this.destroyEvents();
+        this.element.classList.remove('slick-slider');
+        this.element.innerHTML = this.originalHTML;
+        this.element.removeAttribute('role');
+        this.element.removeAttribute('aria-label');
+    }
+
+    destroyEvents() {
+        this.autoPlayClear();
+        // Remove all event listeners...
+        // This would need to store references to bound event handlers
+    }
+
+    // Utility method for debouncing resize events
+    debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
     }
 
     // Add static method for jQuery compatibility
