@@ -713,13 +713,190 @@ class Slick {
         }
     }
 
-    // ... (continuing in next part)
+    /**
+     * Sets up testing utilities
+     * @private
+     */
+    setupTestingUtilities() {
+        this.testUtils = {
+            getState: () => ({ ...this.state.state }),
+            
+            simulateEvent: (eventType, options = {}) => {
+                const event = new CustomEvent(eventType, {
+                    bubbles: true,
+                    cancelable: true,
+                    detail: options
+                });
+                this.element.dispatchEvent(event);
+            },
+
+            simulateTouch: async (points) => {
+                const touch = new Touch({
+                    identifier: Date.now(),
+                    target: this.element,
+                    ...points[0]
+                });
+
+                const touchStart = new TouchEvent('touchstart', {
+                    bubbles: true,
+                    touches: [touch],
+                    targetTouches: [touch],
+                    changedTouches: [touch]
+                });
+
+                this.element.dispatchEvent(touchStart);
+
+                // Simulate touch movement
+                for (let i = 1; i < points.length; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 16)); // ~60fps
+                    const moveTouch = new Touch({
+                        identifier: touch.identifier,
+                        target: this.element,
+                        ...points[i]
+                    });
+
+                    const touchMove = new TouchEvent('touchmove', {
+                        bubbles: true,
+                        touches: [moveTouch],
+                        targetTouches: [moveTouch],
+                        changedTouches: [moveTouch]
+                    });
+
+                    this.element.dispatchEvent(touchMove);
+                }
+
+                const touchEnd = new TouchEvent('touchend', {
+                    bubbles: true,
+                    touches: [],
+                    targetTouches: [],
+                    changedTouches: [touch]
+                });
+
+                this.element.dispatchEvent(touchEnd);
+            },
+
+            simulateResize: (dimensions) => {
+                const resizeObserver = this.resizeObservers.get(this.element);
+                if (resizeObserver) {
+                    resizeObserver.disconnect();
+                    const entry = {
+                        contentRect: dimensions,
+                        target: this.element
+                    };
+                    resizeObserver.observe(this.element);
+                    this.handleResize([entry]);
+                }
+            },
+
+            simulateNetwork: (condition) => {
+                const conditions = {
+                    offline: { type: 'none', effectiveType: '2g', downlink: 0 },
+                    slow: { type: 'cellular', effectiveType: '2g', downlink: 0.5 },
+                    fast: { type: 'wifi', effectiveType: '4g', downlink: 10 }
+                };
+
+                const mockConnection = conditions[condition];
+                if (mockConnection) {
+                    this.handleNetworkChange(mockConnection);
+                }
+            },
+
+            waitForAnimation: () => {
+                return new Promise(resolve => {
+                    const check = () => {
+                        if (!this.isAnimating) {
+                            resolve();
+                        } else {
+                            requestAnimationFrame(check);
+                        }
+                    };
+                    check();
+                });
+            },
+
+            getSlideElements: () => Array.from(this.trackElement.children),
+            
+            getMetrics: () => ({
+                performance: { ...this.performanceMetrics },
+                memory: performance.memory ? {
+                    used: performance.memory.usedJSHeapSize,
+                    total: performance.memory.jsHeapSizeLimit
+                } : null
+            })
+        };
+    }
+
+    /**
+     * Final cleanup and destruction
+     * @public
+     */
+    destroy() {
+        // Stop all monitoring
+        cancelAnimationFrame(this.frameMonitor);
+        
+        // Clear all observers
+        this.intersectionObservers.forEach(observer => observer.disconnect());
+        this.resizeObservers.forEach(observer => observer.disconnect());
+        this.mutationObservers.forEach(observer => observer.disconnect());
+
+        // Clear all intervals and timeouts
+        this.cleanupTasks.forEach(cleanup => cleanup());
+
+        // Remove all event listeners
+        this.boundEventHandlers.forEach((handler, event) => {
+            document.removeEventListener(event, handler);
+        });
+
+        // Clear element cache
+        this.elementCache = new WeakMap();
+
+        // Reset element
+        this.element.innerHTML = this.originalHTML;
+        this.element.classList.remove('slick-initialized', 'slick-slider');
+        
+        // Clear all attributes
+        const attributes = Array.from(this.element.attributes);
+        attributes.forEach(attr => {
+            if (attr.name.startsWith('data-slick') || 
+                attr.name.startsWith('aria-')) {
+                this.element.removeAttribute(attr.name);
+            }
+        });
+
+        // Trigger destroy event
+        this.trigger('destroy');
+
+        // Clear state and references
+        this.state = null;
+        this.element = null;
+        this.settings = null;
+        this.trackElement = null;
+        this.debugElement = null;
+        this.liveRegion = null;
+    }
+
+    /**
+     * Static method to create instance
+     * @public
+     */
+    static create(element, settings = {}) {
+        try {
+            return new Slick(element, settings);
+        } catch (error) {
+            console.error('Failed to create Slick instance:', error);
+            return null;
+        }
+    }
 }
 
-// Export the class
-export default Slick;
+// Add version information
+Slick.VERSION = '2.0.0';
 
-// Add to window object for non-module environments
-if (typeof window !== 'undefined') {
+// Export for different module systems
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = Slick;
+} else if (typeof define === 'function' && define.amd) {
+    define(['slick'], () => Slick);
+} else {
     window.Slick = Slick;
 }
